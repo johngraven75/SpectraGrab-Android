@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -48,3 +48,15 @@ jobs:
           name: SpectraGrab-Android-${{ github.sha }}
           path: artifacts/**
           if-no-files-found: error
+
+
+      - name: Publish GitHub release
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $packages = Get-ChildItem artifacts -Recurse -File | Where-Object { $_.Extension -in '.apk', '.aab' }
+          if (-not $packages) { throw "No APK or AAB packages were produced." }
+          $tag = "android-build-${{ github.run_number }}"
+          gh release create $tag @($packages.FullName) --target "${{ github.sha }}" --title "SpectraGrab Android Build ${{ github.run_number }}" --notes "Automated Android release with one-link AI download planning, direct/HLS transfer, adult metadata verification, provider posters, and NFO sidecars."
