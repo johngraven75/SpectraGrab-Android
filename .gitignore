@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.apk
+*.aab
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.cer
+*.mobileprovision
+local.properties
+artifacts/
+TestResults/
