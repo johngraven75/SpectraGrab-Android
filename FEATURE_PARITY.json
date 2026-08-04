@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "product": "SpectraGrab",
-  "changeId": "SG-CAPTURE-CONFIG-002",
+  "changeId": "SG-CAPTURE-CONFIG-RELEASE-003",
   "model": "Qwen/Qwen3-4B-Instruct-2507",
   "features": {
     "oneLinkAutomatedDownload": "implemented",

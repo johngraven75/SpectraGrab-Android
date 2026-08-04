@@ -25,4 +25,11 @@ A release is not green until:
 
 Any build/workflow failure must be repaired and rerun. Do not accept regressions or silently remove, hide, or disable existing features.
 
+## Production Android release line
+
+- Current production version: `0.2.0` (`versionCode` 2).
+- Release publication is blocked unless all four production signing secrets are present and the APK signer matches the configured non-debug keystore.
+- The signed APK is installed and exercised on an Android emulator before GitHub release publication. The gate covers launch, direct and HLS downloads, completed and user-stopped Live Capture, all five persistent add-in configurations, state preservation, and a same-key version-code upgrade.
+- Build 23 was a test build signed with an Android Debug certificate. Android cannot upgrade it in place to the production signing identity; users who installed that test APK must uninstall it once before installing the production release.
+
 See `REPO_RULES.md` and `docs/CROSS_PLATFORM_SYNC.md` for binding repository policy.
