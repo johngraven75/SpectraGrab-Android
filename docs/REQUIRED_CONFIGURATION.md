@@ -2,7 +2,7 @@
 
 ## Toolchain
 
-- .NET 8 SDK
+- .NET 10 SDK (`10.0.100` baseline)
 - .NET MAUI Android workload (`dotnet workload install maui-android`)
 - Android SDK / command-line tools
 - JDK compatible with the installed Android workload
@@ -28,6 +28,12 @@ Configure repository/environment secrets; never commit them:
 - `ANDROID_KEY_PASSWORD`
 
 Store publication credentials separately as GitHub environment secrets for the selected distribution target. Unsigned CI build artifacts may be used for validation, but a production release is not considered published until signing/distribution succeeds.
+
+The release workflow fails closed when any signing secret is missing, verifies that the certificate is not an Android Debug identity, compares the packaged APK signer with the configured keystore, and publishes only the explicitly selected `*-Signed.apk` and `*-Signed.aab` outputs. Never replace the production keystore after users install a production release; changing the key prevents in-place upgrades.
+
+## Runtime release gate
+
+Pushes to `main` and the release-candidate branch build production-signed packages and run the APK on an Android API 35 emulator. GitHub release publication on `main` occurs only after launch, direct/HLS download, Live Capture completion/stop, five add-in configuration, persistence, and same-key upgrade checks pass.
 
 ## Automation rule
 
