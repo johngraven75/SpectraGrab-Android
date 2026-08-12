@@ -9,8 +9,8 @@
     <Nullable>enable</Nullable>
     <ApplicationTitle>SpectraGrab</ApplicationTitle>
     <ApplicationId>com.johngraven75.spectragrab</ApplicationId>
-    <ApplicationDisplayVersion>0.2.0</ApplicationDisplayVersion>
-    <ApplicationVersion>2</ApplicationVersion>
+    <ApplicationDisplayVersion>0.3.0</ApplicationDisplayVersion>
+    <ApplicationVersion>3</ApplicationVersion>
     <SupportedOSPlatformVersion>21.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 

@@ -122,6 +122,19 @@ assert_private_file() {
   adb shell run-as "$package_id" test -f "$1"
 }
 
+assert_no_private_file() {
+  ! adb shell run-as "$package_id" test -e "$1"
+}
+
+assert_no_partial_files() {
+  local partials
+  partials="$(adb shell run-as "$package_id" find files -name '*.partial' -print | tr -d '\r')"
+  if [[ -n "$partials" ]]; then
+    printf 'Incomplete download files were not cleaned up:\n%s\n' "$partials" >&2
+    return 1
+  fi
+}
+
 replace_plugin_with_marker() {
   local plugin="$1"
   local app_path="files/config/plugins/${plugin}.json"
@@ -157,6 +170,15 @@ assert_private_file 'files/Downloads/direct.mp4'
 assert_private_file 'files/Downloads/direct.nfo'
 
 launch_app
+enter_url 0 'http://10.0.2.2:8765/slow.mp4'
+tap_text 'AI Download & Organize'
+sleep 2
+tap_text 'Stop Download'
+wait_for_text 'incomplete temporary file was removed' 60
+assert_no_private_file 'files/Downloads/slow.mp4'
+assert_no_partial_files
+
+launch_app
 enter_url 0 'http://10.0.2.2:8765/vod/master.m3u8'
 tap_text 'AI Download & Organize'
 wait_for_text 'Complete:' 60
@@ -185,8 +207,8 @@ for plugin in emby jellyfin plex localai quickconnect; do
 done
 
 adb install -r "$upgrade_apk"
-if ! adb shell dumpsys package "$package_id" | grep -q 'versionCode=3'; then
-  printf '%s\n' 'The same-key upgrade APK was not installed as version code 3.' >&2
+if ! adb shell dumpsys package "$package_id" | grep -q 'versionCode=4'; then
+  printf '%s\n' 'The same-key upgrade APK was not installed as version code 4.' >&2
   exit 1
 fi
 launch_app
@@ -194,4 +216,4 @@ for plugin in emby jellyfin plex localai quickconnect; do
   assert_plugin_marker "$plugin"
 done
 
-printf '%s\n' 'Android runtime release gate passed: launch, direct/HLS download, Live Capture completion/stop, five add-ins, persistence, and same-key upgrade.'
+printf '%s\n' 'Android runtime release gate passed: launch, direct/HLS download, download stop/cleanup, Live Capture completion/stop, five add-ins, persistence, and same-key upgrade.'

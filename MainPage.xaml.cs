@@ -8,6 +8,7 @@ public partial class MainPage : ContentPage
     private readonly IMobileAutomatedDownloadService automation;
     private readonly IMobileLiveCaptureService captureService;
     private readonly IMobilePersistentConfigService persistentConfigs;
+    private CancellationTokenSource? downloadCancellation;
     private CancellationTokenSource? captureCancellation;
     private bool configsInitialized;
 
@@ -54,17 +55,23 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        downloadCancellation = new CancellationTokenSource();
         DownloadButton.IsEnabled = false;
+        StopDownloadButton.IsEnabled = true;
         DownloadProgress.Progress = 0;
         StatusLabel.Text = "AI is planning, downloading, and organizing the media...";
         try
         {
             var progress = new Progress<double>(value =>
                 MainThread.BeginInvokeOnMainThread(() => DownloadProgress.Progress = Math.Clamp(value, 0, 100) / 100d));
-            var result = await automation.DownloadAsync(uri.AbsoluteUri, progress, CancellationToken.None);
+            var result = await automation.DownloadAsync(uri.AbsoluteUri, progress, downloadCancellation.Token);
             StatusLabel.Text = result.Warnings.Count == 0
                 ? $"Complete: metadata and poster verified. Saved to {result.FilePath}"
                 : $"Complete with warnings: {string.Join("; ", result.Warnings)}";
+        }
+        catch (OperationCanceledException) when (downloadCancellation?.IsCancellationRequested == true)
+        {
+            StatusLabel.Text = "Download stopped. The incomplete temporary file was removed.";
         }
         catch (Exception ex)
         {
@@ -72,8 +79,18 @@ public partial class MainPage : ContentPage
         }
         finally
         {
+            downloadCancellation.Dispose();
+            downloadCancellation = null;
             DownloadButton.IsEnabled = true;
+            StopDownloadButton.IsEnabled = false;
         }
+    }
+
+    private void OnStopDownloadClicked(object? sender, EventArgs e)
+    {
+        StatusLabel.Text = "Stopping download and cleaning up temporary data...";
+        StopDownloadButton.IsEnabled = false;
+        downloadCancellation?.Cancel();
     }
 
     private async void OnCaptureClicked(object? sender, EventArgs e)

@@ -21,10 +21,10 @@ def property_value(name):
     node = project.find(f".//{name}")
     return "" if node is None or node.text is None else node.text.strip()
 
-if property_value("ApplicationDisplayVersion") != "0.2.0":
-    raise SystemExit("ApplicationDisplayVersion must be 0.2.0 for this production release")
-if property_value("ApplicationVersion") != "2":
-    raise SystemExit("ApplicationVersion must be the monotonically increasing value 2")
+if property_value("ApplicationDisplayVersion") != "0.3.0":
+    raise SystemExit("ApplicationDisplayVersion must be 0.3.0 for this coordinated release")
+if property_value("ApplicationVersion") != "3":
+    raise SystemExit("ApplicationVersion must be the monotonically increasing value 3")
 
 workflow = (root / ".github/workflows/android-ci-release.yml").read_text(encoding="utf-8")
 required_fragments = [
@@ -36,9 +36,15 @@ required_fragments = [
     "*-Signed.apk",
     "*-Signed.aab",
     "runtime-smoke:",
-    "needs: runtime-smoke",
+    "publish-test:",
+    "SpectraGrab-Android-v$env:RELEASE_VERSION-TEST.apk",
+    "Android Debug",
     "android-runtime-smoke.sh",
-    "Retire unsigned Build 23 assets",
+    "available=false",
+    "actions/checkout@v7",
+    "actions/setup-dotnet@v6",
+    "actions/upload-artifact@v7",
+    "actions/download-artifact@v7",
 ]
 missing = [fragment for fragment in required_fragments if fragment not in workflow]
 if missing:
@@ -46,8 +52,8 @@ if missing:
 
 if re.search(r"gh release (?:create|upload)[^\n]*\*\.apk", workflow):
     raise SystemExit("Release publication must never use an unrestricted APK glob")
-if "branches: [main, agent/complete-capture-and-config]" not in workflow:
-    raise SystemExit("The feature branch must run the signed emulator gate before merge")
+if "branches: [main]" not in workflow:
+    raise SystemExit("The Android release workflow must validate the main branch")
 
 for required_path in (
     root / "scripts/android-runtime-smoke.sh",
@@ -56,5 +62,10 @@ for required_path in (
     if not required_path.is_file():
         raise SystemExit(f"Missing runtime release gate dependency: {required_path.relative_to(root)}")
 
-print("Verified Android version 0.2.0 (code 2), production signing gates, emulator coverage, and signed-only release publication.")
+main_page = (root / "MainPage.xaml").read_text(encoding="utf-8")
+download_service = (root / "Services/MobileAutomatedDownloadService.cs").read_text(encoding="utf-8")
+if "Stop Download" not in main_page or ".partial" not in download_service or "DeleteIfExists" not in download_service:
+    raise SystemExit("Android stop control and atomic partial-file cleanup must remain enabled")
+
+print("Verified Android version 0.3.0 (code 3), installable TEST publication, optional production signing, and emulator coverage.")
 PY

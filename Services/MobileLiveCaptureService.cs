@@ -30,31 +30,50 @@ public sealed class MobileLiveCaptureService : IMobileLiveCaptureService
         Directory.CreateDirectory(directory);
         var isHls = uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
         var outputPath = UniquePath(directory, $"SpectraGrab-Capture-{DateTime.UtcNow:yyyyMMdd-HHmmss}", isHls ? ".ts" : MediaExtension(uri));
+        var temporaryPath = $"{outputPath}.{Guid.NewGuid():N}.partial";
         var stopwatch = Stopwatch.StartNew();
         long bytesWritten = 0;
         var stopped = false;
 
-        await using var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 128 * 1024, true);
         try
         {
-            if (isHls)
+            await using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 128 * 1024, true))
             {
-                bytesWritten = await CaptureHlsAsync(uri, output, stopwatch, outputPath, progress, cancellationToken);
+                try
+                {
+                    if (isHls)
+                    {
+                        bytesWritten = await CaptureHlsAsync(uri, output, stopwatch, outputPath, progress, cancellationToken);
+                    }
+                    else
+                    {
+                        bytesWritten = await CaptureDirectAsync(uri, output, stopwatch, outputPath, progress, cancellationToken);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    stopped = true;
+                }
+                finally
+                {
+                    await output.FlushAsync(CancellationToken.None);
+                    bytesWritten = output.Length;
+                    stopwatch.Stop();
+                }
             }
-            else
+
+            if (bytesWritten <= 0)
             {
-                bytesWritten = await CaptureDirectAsync(uri, output, stopwatch, outputPath, progress, cancellationToken);
+                throw new InvalidOperationException(stopped
+                    ? "Capture stopped before any media data was received; no file was created."
+                    : "The stream ended without producing media data; no file was created.");
             }
+            File.Move(temporaryPath, outputPath);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch
         {
-            stopped = true;
-        }
-        finally
-        {
-            await output.FlushAsync(CancellationToken.None);
-            bytesWritten = output.Length;
-            stopwatch.Stop();
+            try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            throw;
         }
 
         progress?.Report(new(outputPath, stopwatch.Elapsed, bytesWritten, stopped ? "Stopped and finalized" : "Complete"));

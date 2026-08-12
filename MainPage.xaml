@@ -9,7 +9,10 @@
       <Label Text="Android companion • synchronized with Windows and iOS" />
       <Entry x:Name="UrlEntry" Placeholder="Paste a media URL" Keyboard="Url" />
       <Button Text="Inspect" Clicked="OnInspectClicked" />
-      <Button x:Name="DownloadButton" Text="AI Download &amp; Organize" Clicked="OnAutomatedDownloadClicked" />
+      <HorizontalStackLayout Spacing="12">
+        <Button x:Name="DownloadButton" Text="AI Download &amp; Organize" Clicked="OnAutomatedDownloadClicked" />
+        <Button x:Name="StopDownloadButton" Text="Stop Download" Clicked="OnStopDownloadClicked" IsEnabled="False" />
+      </HorizontalStackLayout>
       <ProgressBar x:Name="DownloadProgress" Progress="0" />
       <Label Text="Uses Qwen AI planning with an offline fallback, app-scoped storage, adult metadata providers, verified posters, and NFO sidecars." FontSize="12" />
       <Label x:Name="StatusLabel" Text="Ready." />

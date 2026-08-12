@@ -162,20 +162,33 @@ public sealed class MobileAutomatedDownloadService : IMobileAutomatedDownloadSer
         }
 
         var destination = UniquePath(directory, name, extension);
-        await using var input = await response.Content.ReadAsStreamAsync(token);
-        await using var output = File.Create(destination);
-        var total = response.Content.Headers.ContentLength;
-        var buffer = new byte[128 * 1024];
-        long written = 0;
-        int read;
-        while ((read = await input.ReadAsync(buffer, token)) > 0)
+        var temporaryPath = TemporaryPath(destination);
+        try
         {
-            await output.WriteAsync(buffer.AsMemory(0, read), token);
-            written += read;
-            if (total is > 0) progress?.Report(written * 100d / total.Value);
+            await using var input = await response.Content.ReadAsStreamAsync(token);
+            await using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true))
+            {
+                var total = response.Content.Headers.ContentLength;
+                var buffer = new byte[128 * 1024];
+                long written = 0;
+                int read;
+                while ((read = await input.ReadAsync(buffer, token)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read), token);
+                    written += read;
+                    if (total is > 0) progress?.Report(written * 100d / total.Value);
+                }
+                await output.FlushAsync(token);
+            }
+            token.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, destination);
+            progress?.Report(100);
+            return destination;
         }
-        progress?.Report(100);
-        return destination;
+        finally
+        {
+            DeleteIfExists(temporaryPath);
+        }
     }
 
     private async Task<string> DownloadHlsAsync(Uri manifestUri, string directory, string name, IProgress<double>? progress, CancellationToken token)
@@ -200,14 +213,29 @@ public sealed class MobileAutomatedDownloadService : IMobileAutomatedDownloadSer
         var segments = lines.Where(line => !line.StartsWith('#')).Select(line => new Uri(manifestUri, line)).ToList();
         if (segments.Count == 0) throw new InvalidOperationException("HLS playlist contains no media segments.");
         var destination = UniquePath(directory, name, ".ts");
-        await using var output = File.Create(destination);
-        for (var index = 0; index < segments.Count; index++)
+        var temporaryPath = TemporaryPath(destination);
+        try
         {
-            var bytes = await client.GetByteArrayAsync(segments[index], token);
-            await output.WriteAsync(bytes, token);
-            progress?.Report((index + 1) * 100d / segments.Count);
+            await using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true))
+            {
+                for (var index = 0; index < segments.Count; index++)
+                {
+                    using var response = await client.GetAsync(segments[index], HttpCompletionOption.ResponseHeadersRead, token);
+                    response.EnsureSuccessStatusCode();
+                    await using var input = await response.Content.ReadAsStreamAsync(token);
+                    await input.CopyToAsync(output, token);
+                    progress?.Report((index + 1) * 100d / segments.Count);
+                }
+                await output.FlushAsync(token);
+            }
+            token.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, destination);
+            return destination;
         }
-        return destination;
+        finally
+        {
+            DeleteIfExists(temporaryPath);
+        }
     }
 
     private async Task<Metadata> FetchTpdbAsync(string title, string key, string baseUrl, CancellationToken token)
@@ -269,6 +297,8 @@ public sealed class MobileAutomatedDownloadService : IMobileAutomatedDownloadSer
 
     private static Metadata Merge(Metadata incoming, Metadata fallback) => new(incoming.Title ?? fallback.Title, incoming.Overview ?? fallback.Overview, incoming.PosterUrl ?? fallback.PosterUrl, incoming.Year ?? fallback.Year, incoming.Genre ?? fallback.Genre, incoming.ProviderId ?? fallback.ProviderId);
     private static string UniquePath(string directory, string name, string extension) { var candidate = Path.Combine(directory, name + extension); for (var i = 1; File.Exists(candidate); i++) candidate = Path.Combine(directory, $"{name} ({i}){extension}"); return candidate; }
+    private static string TemporaryPath(string destination) => $"{destination}.{Guid.NewGuid():N}.partial";
+    private static void DeleteIfExists(string path) { try { if (File.Exists(path)) File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
     private static string Sanitize(string value) => string.Join("_", value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
     private static bool IsAdult(string value) { var lower = value.ToLowerInvariant(); return new[] { "adult", "porn", "xxx", "nsfw", "xvideos", "xnxx", "pornhub", "redtube", "youporn", "xhamster", "spankbang", "boyfriend.tv" }.Any(lower.Contains); }
     private static bool IsImage(byte[] bytes) => bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xD8, 0xFF }) || bytes.AsSpan().StartsWith(new byte[] { 0x89, 0x50, 0x4E, 0x47 });

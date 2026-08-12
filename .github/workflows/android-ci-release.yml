@@ -2,7 +2,7 @@ name: Android CI, Runtime Verification, and Release
 
 on:
   push:
-    branches: [main, agent/complete-capture-and-config]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -17,8 +17,9 @@ concurrency:
 
 env:
   DOTNET_VERSION: 10.0.100
-  RELEASE_VERSION: 0.2.0
-  RELEASE_VERSION_CODE: 2
+  RELEASE_VERSION: 0.3.0
+  RELEASE_VERSION_CODE: 3
+  UPGRADE_TEST_VERSION_CODE: 4
 
 jobs:
   validate:
@@ -26,203 +27,112 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v7
       - name: Validate persistent provider and add-in configs
         shell: bash
         run: bash scripts/validate-persistent-configs.sh
-
       - name: Validate release policy
         shell: bash
         run: bash scripts/validate-android-release.sh
-
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
       - name: Install MAUI Android workload
         shell: pwsh
         run: dotnet workload install maui-android --version $env:DOTNET_VERSION
-
       - name: Restore
         shell: pwsh
         run: dotnet restore SpectraGrab.Android.csproj
-
       - name: Build Release
         shell: pwsh
         run: dotnet build SpectraGrab.Android.csproj -f net10.0-android -c Release --no-restore
 
-  package:
-    name: Create production-signed packages
+  package-test:
+    name: Create installable TEST APKs
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: validate
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Require production signing secrets
-        shell: pwsh
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          $required = @(
-            'ANDROID_KEYSTORE_BASE64',
-            'ANDROID_KEYSTORE_PASSWORD',
-            'ANDROID_KEY_ALIAS',
-            'ANDROID_KEY_PASSWORD'
-          )
-          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace((Get-Item "Env:$_" -ErrorAction SilentlyContinue).Value) })
-          if ($missing.Count -gt 0) {
-            throw "Production Android signing is required. Missing GitHub Actions secrets: $($missing -join ', ')."
-          }
-
+        uses: actions/checkout@v7
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
       - name: Install MAUI Android workload
         shell: pwsh
         run: dotnet workload install maui-android --version $env:DOTNET_VERSION
-
       - name: Restore
         shell: pwsh
         run: dotnet restore SpectraGrab.Android.csproj
-
-      - name: Decode and verify production keystore
-        shell: pwsh
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: |
-          $keystorePath = Join-Path $env:RUNNER_TEMP 'spectragrab-production.p12'
-          try {
-            [IO.File]::WriteAllBytes($keystorePath, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
-          } catch {
-            throw "ANDROID_KEYSTORE_BASE64 is not a valid Base64-encoded keystore: $($_.Exception.Message)"
-          }
-          $keytoolOutput = & keytool -list -v -keystore $keystorePath -storepass $env:ANDROID_KEYSTORE_PASSWORD -alias $env:ANDROID_KEY_ALIAS 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "Production keystore or alias validation failed: $keytoolOutput" }
-          if ($keytoolOutput -match 'Android Debug') { throw 'A debug signing certificate cannot be used for production.' }
-          $fingerprintLine = $keytoolOutput | Where-Object { $_ -match 'SHA256:' } | Select-Object -First 1
-          if (-not $fingerprintLine) { throw 'Unable to read the production signing certificate fingerprint.' }
-          $fingerprint = (($fingerprintLine -split 'SHA256:')[1] -replace '[^0-9A-Fa-f]', '').ToLowerInvariant()
-          "ANDROID_KEYSTORE_PATH=$keystorePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "ANDROID_SIGNING_CERT_SHA256=$fingerprint" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Publish production-signed APK and AAB
-        shell: pwsh
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          $signing = @(
-            '-p:AndroidKeyStore=true',
-            "-p:AndroidSigningKeyStore=$env:ANDROID_KEYSTORE_PATH",
-            "-p:AndroidSigningStorePass=$env:ANDROID_KEYSTORE_PASSWORD",
-            "-p:AndroidSigningKeyAlias=$env:ANDROID_KEY_ALIAS",
-            "-p:AndroidSigningKeyPass=$env:ANDROID_KEY_PASSWORD"
-          )
-          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Release --no-restore -p:AndroidPackageFormats=apk -o artifacts/apk @signing
-          if ($LASTEXITCODE -ne 0) { throw 'Production APK publication failed.' }
-          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Release --no-restore -p:AndroidPackageFormats=aab -o artifacts/aab @signing
-          if ($LASTEXITCODE -ne 0) { throw 'Production AAB publication failed.' }
-
-      - name: Build same-key upgrade verification APK
-        shell: pwsh
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          $signing = @(
-            '-p:AndroidKeyStore=true',
-            "-p:AndroidSigningKeyStore=$env:ANDROID_KEYSTORE_PATH",
-            "-p:AndroidSigningStorePass=$env:ANDROID_KEYSTORE_PASSWORD",
-            "-p:AndroidSigningKeyAlias=$env:ANDROID_KEY_ALIAS",
-            "-p:AndroidSigningKeyPass=$env:ANDROID_KEY_PASSWORD"
-          )
-          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Release --no-restore -p:AndroidPackageFormats=apk -p:ApplicationVersion=3 -p:ApplicationDisplayVersion=0.2.1-test -o artifacts/upgrade-test @signing
-          if ($LASTEXITCODE -ne 0) { throw 'Upgrade verification APK publication failed.' }
-
-      - name: Select and verify release packages
+      - name: Publish debug-signed TEST and upgrade APKs
         shell: pwsh
         run: |
-          $releaseDirectory = New-Item -ItemType Directory -Force artifacts/release
-          $runtimeDirectory = New-Item -ItemType Directory -Force artifacts/runtime
-          $apks = @(Get-ChildItem artifacts/apk -Recurse -File -Filter '*-Signed.apk')
-          $aabs = @(Get-ChildItem artifacts/aab -Recurse -File -Filter '*-Signed.aab')
+          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Debug --no-restore -p:AndroidPackageFormats=apk -p:ApplicationDisplayVersion="${env:RELEASE_VERSION}-test" -p:ApplicationVersion=$env:RELEASE_VERSION_CODE -o artifacts/test
+          if ($LASTEXITCODE -ne 0) { throw 'TEST APK publication failed.' }
+          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Debug --no-restore -p:AndroidPackageFormats=apk -p:ApplicationDisplayVersion="${env:RELEASE_VERSION}-upgrade-test" -p:ApplicationVersion=$env:UPGRADE_TEST_VERSION_CODE -o artifacts/upgrade-test
+          if ($LASTEXITCODE -ne 0) { throw 'Upgrade TEST APK publication failed.' }
+      - name: Select and verify TEST APKs
+        shell: pwsh
+        run: |
+          $releaseDirectory = New-Item -ItemType Directory -Force artifacts/release-test
+          $runtimeDirectory = New-Item -ItemType Directory -Force artifacts/runtime-test
+          $testApks = @(Get-ChildItem artifacts/test -Recurse -File -Filter '*-Signed.apk')
           $upgradeApks = @(Get-ChildItem artifacts/upgrade-test -Recurse -File -Filter '*-Signed.apk')
-          if ($apks.Count -ne 1) { throw "Expected exactly one production-signed APK, found $($apks.Count)." }
-          if ($aabs.Count -ne 1) { throw "Expected exactly one production-signed AAB, found $($aabs.Count)." }
-          if ($upgradeApks.Count -ne 1) { throw "Expected exactly one signed upgrade-test APK, found $($upgradeApks.Count)." }
-
-          $releaseApk = Join-Path $releaseDirectory.FullName "SpectraGrab-Android-v$env:RELEASE_VERSION.apk"
-          $releaseAab = Join-Path $releaseDirectory.FullName "SpectraGrab-Android-v$env:RELEASE_VERSION.aab"
-          $upgradeApk = Join-Path $runtimeDirectory.FullName 'SpectraGrab-Android-upgrade-test.apk'
-          Copy-Item $apks[0].FullName $releaseApk
-          Copy-Item $aabs[0].FullName $releaseAab
-          Copy-Item $upgradeApks[0].FullName $upgradeApk
-          Copy-Item $releaseApk (Join-Path $runtimeDirectory.FullName 'SpectraGrab-Android-release.apk')
-
+          if ($testApks.Count -ne 1) { throw "Expected exactly one debug-signed TEST APK, found $($testApks.Count)." }
+          if ($upgradeApks.Count -ne 1) { throw "Expected exactly one debug-signed upgrade TEST APK, found $($upgradeApks.Count)." }
+          $testApk = Join-Path $releaseDirectory.FullName "SpectraGrab-Android-v$env:RELEASE_VERSION-TEST.apk"
+          Copy-Item $testApks[0].FullName $testApk
+          Copy-Item $testApk (Join-Path $runtimeDirectory.FullName 'SpectraGrab-Android-test.apk')
+          Copy-Item $upgradeApks[0].FullName (Join-Path $runtimeDirectory.FullName 'SpectraGrab-Android-upgrade-test.apk')
           $buildTools = Get-ChildItem (Join-Path $env:ANDROID_HOME 'build-tools') -Directory | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $buildTools) { throw 'Android build-tools were not found.' }
-          $apkSigner = Join-Path $buildTools.FullName 'apksigner.bat'
-          $aapt = Join-Path $buildTools.FullName 'aapt.exe'
-          $signatureReport = & $apkSigner verify --verbose --print-certs $releaseApk 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed: $signatureReport" }
-          if ($signatureReport -match 'Android Debug') { throw 'Release APK is signed with an Android Debug certificate.' }
-          $actualFingerprintLine = $signatureReport | Where-Object { $_ -match 'certificate SHA-256 digest:' } | Select-Object -First 1
-          if (-not $actualFingerprintLine) { throw 'APK signer certificate fingerprint is missing.' }
-          $actualFingerprint = (($actualFingerprintLine -split 'digest:')[1] -replace '[^0-9A-Fa-f]', '').ToLowerInvariant()
-          if ($actualFingerprint -ne $env:ANDROID_SIGNING_CERT_SHA256) { throw 'APK signer does not match the configured production keystore.' }
-          $badging = & $aapt dump badging $releaseApk 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "APK manifest inspection failed: $badging" }
+          $signatureReport = & (Join-Path $buildTools.FullName 'apksigner.bat') verify --verbose --print-certs $testApk 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "TEST APK signature verification failed: $signatureReport" }
+          if ($signatureReport -notmatch 'Android Debug') { throw 'TEST APK must use the Android Debug identity so it cannot be mistaken for production.' }
+          $badging = & (Join-Path $buildTools.FullName 'aapt.exe') dump badging $testApk 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "TEST APK manifest inspection failed: $badging" }
           if ($badging -notmatch "package: name='com.johngraven75.spectragrab'") { throw 'Unexpected Android package ID.' }
-          if ($badging -notmatch "versionCode='$env:RELEASE_VERSION_CODE'") { throw 'Unexpected Android version code.' }
-          if ($badging -notmatch "versionName='$env:RELEASE_VERSION'") { throw 'Unexpected Android display version.' }
-          $signatureReport | Out-File artifacts/release/apk-signature-report.txt -Encoding utf8
-          $badging | Out-File artifacts/release/apk-manifest-report.txt -Encoding utf8
-
-      - name: Upload verified production packages
-        uses: actions/upload-artifact@v4
+          if ($badging -notmatch "versionCode='$env:RELEASE_VERSION_CODE'") { throw 'Unexpected TEST APK version code.' }
+          if ($badging -notmatch "versionName='${env:RELEASE_VERSION}-test'") { throw 'Unexpected TEST APK display version.' }
+          $signatureReport | Out-File artifacts/release-test/apk-signature-report.txt -Encoding utf8
+          $badging | Out-File artifacts/release-test/apk-manifest-report.txt -Encoding utf8
+          ((Get-FileHash $testApk -Algorithm SHA256).Hash.ToLowerInvariant() + "  " + (Split-Path $testApk -Leaf)) | Out-File "$testApk.sha256" -Encoding ascii
+      - name: Upload installable TEST APK
+        uses: actions/upload-artifact@v7
         with:
-          name: SpectraGrab-Android-production-${{ github.sha }}
-          path: artifacts/release/**
+          name: SpectraGrab-Android-TEST-${{ github.sha }}
+          path: artifacts/release-test/**
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload runtime verification packages
-        uses: actions/upload-artifact@v4
+      - name: Upload TEST runtime packages
+        uses: actions/upload-artifact@v7
         with:
-          name: SpectraGrab-Android-runtime-${{ github.sha }}
-          path: artifacts/runtime/**
+          name: SpectraGrab-Android-runtime-test-${{ github.sha }}
+          path: artifacts/runtime-test/**
           if-no-files-found: error
           retention-days: 3
 
   runtime-smoke:
-    name: Android emulator release gate
+    name: Android emulator TEST gate
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    needs: package
+    needs: package-test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download signed runtime packages
-        uses: actions/download-artifact@v4
+        uses: actions/checkout@v7
+      - name: Download TEST runtime packages
+        uses: actions/download-artifact@v7
         with:
-          name: SpectraGrab-Android-runtime-${{ github.sha }}
-          path: artifacts/runtime
-
-      - name: Exercise release APK on Android emulator
+          name: SpectraGrab-Android-runtime-test-${{ github.sha }}
+          path: artifacts/runtime-test
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise TEST APK on Android emulator
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 35
@@ -230,37 +140,209 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash scripts/android-runtime-smoke.sh artifacts/runtime/SpectraGrab-Android-release.apk artifacts/runtime/SpectraGrab-Android-upgrade-test.apk
-
+          script: bash scripts/android-runtime-smoke.sh artifacts/runtime-test/SpectraGrab-Android-test.apk artifacts/runtime-test/SpectraGrab-Android-upgrade-test.apk
       - name: Upload runtime diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: SpectraGrab-Android-runtime-diagnostics-${{ github.sha }}
           path: artifacts/runtime-diagnostics/**
           if-no-files-found: warn
           retention-days: 14
 
-  release:
-    name: Publish verified Android release
+  publish-test:
+    name: Publish downloadable TEST APK
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: runtime-smoke
     runs-on: ubuntu-latest
     steps:
+      - name: Download verified TEST APK
+        uses: actions/download-artifact@v7
+        with:
+          name: SpectraGrab-Android-TEST-${{ github.sha }}
+          path: release-test
+      - name: Publish TEST prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="android-v${RELEASE_VERSION}-test-build-${GITHUB_RUN_NUMBER}"
+          apk="release-test/SpectraGrab-Android-v${RELEASE_VERSION}-TEST.apk"
+          sha="${apk}.sha256"
+          notes="Installable Android TEST build ${RELEASE_VERSION} (${RELEASE_VERSION_CODE}), verified on an API 35 emulator: launch, direct/HLS download, stop cleanup, completed and user-stopped Live Capture, five persistent add-in configurations, and same-key upgrade. This APK uses the Android Debug certificate, is not a production/store package, and may require uninstalling an older build signed with a different key."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" "$sha" --clobber
+            gh release edit "$tag" --target "$GITHUB_SHA" --title "SpectraGrab Android ${RELEASE_VERSION} TEST Build ${GITHUB_RUN_NUMBER}" --notes "$notes" --prerelease
+          else
+            gh release create "$tag" "$apk" "$sha" --target "$GITHUB_SHA" --title "SpectraGrab Android ${RELEASE_VERSION} TEST Build ${GITHUB_RUN_NUMBER}" --notes "$notes" --prerelease
+          fi
+
+  package-production:
+    name: Create production-signed packages when configured
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: windows-latest
+    outputs:
+      available: ${{ steps.signing.outputs.available }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Detect production signing readiness
+        id: signing
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          $required = @('ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD')
+          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace((Get-Item "Env:$_" -ErrorAction SilentlyContinue).Value) })
+          if ($missing.Count -gt 0) {
+            'available=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "### Production Android package skipped`nMissing repository secrets: $($missing -join ', '). The verified TEST APK is still published." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          } else {
+            'available=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+      - name: Setup .NET 10
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Install MAUI Android workload
+        if: steps.signing.outputs.available == 'true'
+        shell: pwsh
+        run: dotnet workload install maui-android --version $env:DOTNET_VERSION
+      - name: Restore
+        if: steps.signing.outputs.available == 'true'
+        shell: pwsh
+        run: dotnet restore SpectraGrab.Android.csproj
+      - name: Decode and verify production keystore
+        if: steps.signing.outputs.available == 'true'
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          $keystorePath = Join-Path $env:RUNNER_TEMP 'spectragrab-production.p12'
+          try { [IO.File]::WriteAllBytes($keystorePath, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64)) }
+          catch { throw "ANDROID_KEYSTORE_BASE64 is invalid: $($_.Exception.Message)" }
+          $keytoolOutput = & keytool -list -v -keystore $keystorePath -storepass $env:ANDROID_KEYSTORE_PASSWORD -alias $env:ANDROID_KEY_ALIAS 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "Production keystore validation failed: $keytoolOutput" }
+          if ($keytoolOutput -match 'Android Debug') { throw 'A debug signing certificate cannot be used for production.' }
+          $fingerprintLine = $keytoolOutput | Where-Object { $_ -match 'SHA256:' } | Select-Object -First 1
+          if (-not $fingerprintLine) { throw 'Unable to read the production signing certificate fingerprint.' }
+          $fingerprint = (($fingerprintLine -split 'SHA256:')[1] -replace '[^0-9A-Fa-f]', '').ToLowerInvariant()
+          "ANDROID_KEYSTORE_PATH=$keystorePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ANDROID_SIGNING_CERT_SHA256=$fingerprint" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Publish production-signed APK and AAB
+        if: steps.signing.outputs.available == 'true'
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          $signing = @('-p:AndroidKeyStore=true', "-p:AndroidSigningKeyStore=$env:ANDROID_KEYSTORE_PATH", "-p:AndroidSigningStorePass=$env:ANDROID_KEYSTORE_PASSWORD", "-p:AndroidSigningKeyAlias=$env:ANDROID_KEY_ALIAS", "-p:AndroidSigningKeyPass=$env:ANDROID_KEY_PASSWORD")
+          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Release --no-restore -p:AndroidPackageFormats=apk -o artifacts/apk @signing
+          if ($LASTEXITCODE -ne 0) { throw 'Production APK publication failed.' }
+          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Release --no-restore -p:AndroidPackageFormats=aab -o artifacts/aab @signing
+          if ($LASTEXITCODE -ne 0) { throw 'Production AAB publication failed.' }
+          dotnet publish SpectraGrab.Android.csproj -f net10.0-android -c Release --no-restore -p:AndroidPackageFormats=apk -p:ApplicationVersion=$env:UPGRADE_TEST_VERSION_CODE -p:ApplicationDisplayVersion="${env:RELEASE_VERSION}-upgrade-test" -o artifacts/upgrade-test @signing
+          if ($LASTEXITCODE -ne 0) { throw 'Production upgrade verification APK publication failed.' }
+      - name: Select and verify production packages
+        if: steps.signing.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          $releaseDirectory = New-Item -ItemType Directory -Force artifacts/release
+          $runtimeDirectory = New-Item -ItemType Directory -Force artifacts/runtime-production
+          $apks = @(Get-ChildItem artifacts/apk -Recurse -File -Filter '*-Signed.apk')
+          $aabs = @(Get-ChildItem artifacts/aab -Recurse -File -Filter '*-Signed.aab')
+          $upgradeApks = @(Get-ChildItem artifacts/upgrade-test -Recurse -File -Filter '*-Signed.apk')
+          if ($apks.Count -ne 1 -or $aabs.Count -ne 1 -or $upgradeApks.Count -ne 1) { throw 'Expected exactly one signed APK, AAB, and upgrade APK.' }
+          $releaseApk = Join-Path $releaseDirectory.FullName "SpectraGrab-Android-v$env:RELEASE_VERSION.apk"
+          $releaseAab = Join-Path $releaseDirectory.FullName "SpectraGrab-Android-v$env:RELEASE_VERSION.aab"
+          Copy-Item $apks[0].FullName $releaseApk
+          Copy-Item $aabs[0].FullName $releaseAab
+          Copy-Item $releaseApk (Join-Path $runtimeDirectory.FullName 'SpectraGrab-Android-release.apk')
+          Copy-Item $upgradeApks[0].FullName (Join-Path $runtimeDirectory.FullName 'SpectraGrab-Android-upgrade-test.apk')
+          $buildTools = Get-ChildItem (Join-Path $env:ANDROID_HOME 'build-tools') -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          $signatureReport = & (Join-Path $buildTools.FullName 'apksigner.bat') verify --verbose --print-certs $releaseApk 2>&1
+          if ($LASTEXITCODE -ne 0 -or $signatureReport -match 'Android Debug') { throw "Production APK signature verification failed: $signatureReport" }
+          $actualFingerprintLine = $signatureReport | Where-Object { $_ -match 'certificate SHA-256 digest:' } | Select-Object -First 1
+          if (-not $actualFingerprintLine) { throw 'Production APK certificate fingerprint is missing.' }
+          $actualFingerprint = (($actualFingerprintLine -split 'digest:')[1] -replace '[^0-9A-Fa-f]', '').ToLowerInvariant()
+          if ($actualFingerprint -ne $env:ANDROID_SIGNING_CERT_SHA256) { throw 'APK signer does not match the configured production keystore.' }
+          $badging = & (Join-Path $buildTools.FullName 'aapt.exe') dump badging $releaseApk 2>&1
+          if ($badging -notmatch "versionCode='$env:RELEASE_VERSION_CODE'" -or $badging -notmatch "versionName='$env:RELEASE_VERSION'") { throw 'Production APK version metadata is incorrect.' }
+          $signatureReport | Out-File artifacts/release/apk-signature-report.txt -Encoding utf8
+          $badging | Out-File artifacts/release/apk-manifest-report.txt -Encoding utf8
+      - name: Upload verified production packages
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: SpectraGrab-Android-production-${{ github.sha }}
+          path: artifacts/release/**
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload production runtime packages
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: SpectraGrab-Android-runtime-production-${{ github.sha }}
+          path: artifacts/runtime-production/**
+          if-no-files-found: error
+          retention-days: 3
+
+  runtime-production:
+    name: Android production emulator gate
+    if: needs.package-production.outputs.available == 'true'
+    needs: package-production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Download production runtime packages
+        uses: actions/download-artifact@v7
+        with:
+          name: SpectraGrab-Android-runtime-production-${{ github.sha }}
+          path: artifacts/runtime-production
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise production APK on Android emulator
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash scripts/android-runtime-smoke.sh artifacts/runtime-production/SpectraGrab-Android-release.apk artifacts/runtime-production/SpectraGrab-Android-upgrade-test.apk
+
+  release-production:
+    name: Publish verified Android production release
+    if: always() && github.ref == 'refs/heads/main' && needs.package-production.outputs.available == 'true' && needs.runtime-production.result == 'success'
+    needs: [package-production, runtime-production]
+    runs-on: ubuntu-latest
+    steps:
       - name: Download verified production packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: SpectraGrab-Android-production-${{ github.sha }}
           path: release
-
-      - name: Publish replacement release
+      - name: Publish production release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="android-v${RELEASE_VERSION}"
-          notes="Production-signed SpectraGrab Android ${RELEASE_VERSION}. Verified on an Android API 35 x86_64 emulator: launch, direct download, HLS download, completed and user-stopped Live Capture, five persistent add-in configurations, configuration persistence, and a same-key version-code upgrade. Android Build 23 used a debug signing identity; users who installed that test APK must uninstall it once before installing this production line."
+          notes="Production-signed SpectraGrab Android ${RELEASE_VERSION}, verified on Android API 35. The separate TEST prerelease remains debug-signed and must not be treated as a store package."
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release/SpectraGrab-Android-v${RELEASE_VERSION}.apk release/SpectraGrab-Android-v${RELEASE_VERSION}.aab --clobber
             gh release edit "$tag" --target "$GITHUB_SHA" --title "SpectraGrab Android v${RELEASE_VERSION}" --notes "$notes" --latest
@@ -268,28 +350,20 @@ jobs:
             gh release create "$tag" release/SpectraGrab-Android-v${RELEASE_VERSION}.apk release/SpectraGrab-Android-v${RELEASE_VERSION}.aab --target "$GITHUB_SHA" --title "SpectraGrab Android v${RELEASE_VERSION}" --notes "$notes" --latest
           fi
 
-      - name: Retire unsigned Build 23 assets
+  report-failure:
+    name: Report main release failure
+    if: always() && github.ref == 'refs/heads/main' && contains(join(needs.*.result, ','), 'failure')
+    needs: [validate, package-test, runtime-smoke, publish-test, package-production, runtime-production, release-production]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update release failure issue
+        continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          old_tag='android-build-23'
-          if gh release view "$old_tag" >/dev/null 2>&1; then
-            gh release delete-asset "$old_tag" 'com.johngraven75.spectragrab.apk' --yes 2>/dev/null || true
-            gh release delete-asset "$old_tag" 'com.johngraven75.spectragrab.aab' --yes 2>/dev/null || true
-            gh release edit "$old_tag" --prerelease --title 'SpectraGrab Android Build 23 (superseded test-only)' --notes 'Superseded test build. The unsigned APK/AAB assets were removed. The remaining packages use an Android Debug certificate and are not production releases. Use the latest production-signed SpectraGrab Android release instead.'
-          fi
-
-  report-failure:
-    name: Report main release failure
-    if: always() && github.ref == 'refs/heads/main' && (needs.validate.result == 'failure' || needs.package.result == 'failure' || needs.runtime-smoke.result == 'failure' || needs.release.result == 'failure')
-    needs: [validate, package, runtime-smoke, release]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Open release failure issue
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue create --title "Android production release failed — run ${{ github.run_number }}" --body "The production signing, package, emulator, upgrade, or release gate failed. Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} Commit: ${{ github.sha }}"
+          title='SpectraGrab Android release failure'
+          body="A build, TEST artifact, emulator, production-signing, or publication gate failed. Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} Commit: ${GITHUB_SHA}"
+          existing="$(gh issue list --state open --search "${title} in:title" --json number,title --jq ".[] | select(.title == \"${title}\") | .number" | head -n1)"
+          if [[ -n "$existing" ]]; then gh issue comment "$existing" --body "$body"; else gh issue create --title "$title" --body "$body"; fi

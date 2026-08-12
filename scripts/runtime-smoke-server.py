@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import argparse
+import time
 
 
 MP4 = (
@@ -14,6 +15,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/direct.mp4":
             return self.send_payload("video/mp4", MP4)
+        if self.path == "/slow.mp4":
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(len(MP4) * 200))
+            self.end_headers()
+            try:
+                for _ in range(200):
+                    self.wfile.write(MP4)
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if self.path == "/vod/master.m3u8":
             return self.send_payload(
                 "application/vnd.apple.mpegurl",
