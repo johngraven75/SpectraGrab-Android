@@ -90,12 +90,14 @@ jobs:
           if (-not $buildTools) { throw 'Android build-tools were not found.' }
           $signatureReport = & (Join-Path $buildTools.FullName 'apksigner.bat') verify --verbose --print-certs $testApk 2>&1
           if ($LASTEXITCODE -ne 0) { throw "TEST APK signature verification failed: $signatureReport" }
-          if ($signatureReport -notmatch 'Android Debug') { throw 'TEST APK must use the Android Debug identity so it cannot be mistaken for production.' }
+          $signatureReportText = $signatureReport -join [Environment]::NewLine
+          if ($signatureReportText -notmatch 'Android Debug') { throw 'TEST APK must use the Android Debug identity so it cannot be mistaken for production.' }
           $badging = & (Join-Path $buildTools.FullName 'aapt.exe') dump badging $testApk 2>&1
           if ($LASTEXITCODE -ne 0) { throw "TEST APK manifest inspection failed: $badging" }
-          if ($badging -notmatch "package: name='com.johngraven75.spectragrab'") { throw 'Unexpected Android package ID.' }
-          if ($badging -notmatch "versionCode='$env:RELEASE_VERSION_CODE'") { throw 'Unexpected TEST APK version code.' }
-          if ($badging -notmatch "versionName='${env:RELEASE_VERSION}-test'") { throw 'Unexpected TEST APK display version.' }
+          $badgingText = $badging -join [Environment]::NewLine
+          if ($badgingText -notmatch "package: name='com.johngraven75.spectragrab'") { throw 'Unexpected Android package ID.' }
+          if ($badgingText -notmatch "versionCode='$env:RELEASE_VERSION_CODE'") { throw 'Unexpected TEST APK version code.' }
+          if ($badgingText -notmatch "versionName='${env:RELEASE_VERSION}-test'") { throw 'Unexpected TEST APK display version.' }
           $signatureReport | Out-File artifacts/release-test/apk-signature-report.txt -Encoding utf8
           $badging | Out-File artifacts/release-test/apk-manifest-report.txt -Encoding utf8
           ((Get-FileHash $testApk -Algorithm SHA256).Hash.ToLowerInvariant() + "  " + (Split-Path $testApk -Leaf)) | Out-File "$testApk.sha256" -Encoding ascii
@@ -270,13 +272,15 @@ jobs:
           Copy-Item $upgradeApks[0].FullName (Join-Path $runtimeDirectory.FullName 'SpectraGrab-Android-upgrade-test.apk')
           $buildTools = Get-ChildItem (Join-Path $env:ANDROID_HOME 'build-tools') -Directory | Sort-Object Name -Descending | Select-Object -First 1
           $signatureReport = & (Join-Path $buildTools.FullName 'apksigner.bat') verify --verbose --print-certs $releaseApk 2>&1
-          if ($LASTEXITCODE -ne 0 -or $signatureReport -match 'Android Debug') { throw "Production APK signature verification failed: $signatureReport" }
+          $signatureReportText = $signatureReport -join [Environment]::NewLine
+          if ($LASTEXITCODE -ne 0 -or $signatureReportText -match 'Android Debug') { throw "Production APK signature verification failed: $signatureReport" }
           $actualFingerprintLine = $signatureReport | Where-Object { $_ -match 'certificate SHA-256 digest:' } | Select-Object -First 1
           if (-not $actualFingerprintLine) { throw 'Production APK certificate fingerprint is missing.' }
           $actualFingerprint = (($actualFingerprintLine -split 'digest:')[1] -replace '[^0-9A-Fa-f]', '').ToLowerInvariant()
           if ($actualFingerprint -ne $env:ANDROID_SIGNING_CERT_SHA256) { throw 'APK signer does not match the configured production keystore.' }
           $badging = & (Join-Path $buildTools.FullName 'aapt.exe') dump badging $releaseApk 2>&1
-          if ($badging -notmatch "versionCode='$env:RELEASE_VERSION_CODE'" -or $badging -notmatch "versionName='$env:RELEASE_VERSION'") { throw 'Production APK version metadata is incorrect.' }
+          $badgingText = $badging -join [Environment]::NewLine
+          if ($badgingText -notmatch "versionCode='$env:RELEASE_VERSION_CODE'" -or $badgingText -notmatch "versionName='$env:RELEASE_VERSION'") { throw 'Production APK version metadata is incorrect.' }
           $signatureReport | Out-File artifacts/release/apk-signature-report.txt -Encoding utf8
           $badging | Out-File artifacts/release/apk-manifest-report.txt -Encoding utf8
       - name: Upload verified production packages
