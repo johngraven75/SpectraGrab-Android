@@ -27,7 +27,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Validate persistent provider and add-in configs
         shell: bash
         run: bash scripts/validate-persistent-configs.sh
@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: bash scripts/validate-android-release.sh
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - name: Install MAUI Android workload
@@ -55,9 +55,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - name: Install MAUI Android workload
@@ -102,14 +102,14 @@ jobs:
           $badging | Out-File artifacts/release-test/apk-manifest-report.txt -Encoding utf8
           ((Get-FileHash $testApk -Algorithm SHA256).Hash.ToLowerInvariant() + "  " + (Split-Path $testApk -Leaf)) | Out-File "$testApk.sha256" -Encoding ascii
       - name: Upload installable TEST APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: SpectraGrab-Android-TEST-${{ github.sha }}
           path: artifacts/release-test/**
           if-no-files-found: error
           retention-days: 30
       - name: Upload TEST runtime packages
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: SpectraGrab-Android-runtime-test-${{ github.sha }}
           path: artifacts/runtime-test/**
@@ -123,9 +123,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download TEST runtime packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: SpectraGrab-Android-runtime-test-${{ github.sha }}
           path: artifacts/runtime-test
@@ -145,7 +145,7 @@ jobs:
           script: bash scripts/android-runtime-smoke.sh artifacts/runtime-test/SpectraGrab-Android-test.apk artifacts/runtime-test/SpectraGrab-Android-upgrade-test.apk
       - name: Upload runtime diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: SpectraGrab-Android-runtime-diagnostics-${{ github.sha }}
           path: artifacts/runtime-diagnostics/**
@@ -159,7 +159,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download verified TEST APK
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: SpectraGrab-Android-TEST-${{ github.sha }}
           path: release-test
@@ -189,7 +189,7 @@ jobs:
       available: ${{ steps.signing.outputs.available }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Detect production signing readiness
         id: signing
         shell: pwsh
@@ -209,7 +209,7 @@ jobs:
           }
       - name: Setup .NET 10
         if: steps.signing.outputs.available == 'true'
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - name: Install MAUI Android workload
@@ -285,7 +285,7 @@ jobs:
           $badging | Out-File artifacts/release/apk-manifest-report.txt -Encoding utf8
       - name: Upload verified production packages
         if: steps.signing.outputs.available == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: SpectraGrab-Android-production-${{ github.sha }}
           path: artifacts/release/**
@@ -293,7 +293,7 @@ jobs:
           retention-days: 30
       - name: Upload production runtime packages
         if: steps.signing.outputs.available == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: SpectraGrab-Android-runtime-production-${{ github.sha }}
           path: artifacts/runtime-production/**
@@ -307,9 +307,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download production runtime packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: SpectraGrab-Android-runtime-production-${{ github.sha }}
           path: artifacts/runtime-production
@@ -335,7 +335,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download verified production packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: SpectraGrab-Android-production-${{ github.sha }}
           path: release

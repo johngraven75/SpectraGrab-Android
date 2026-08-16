@@ -41,10 +41,10 @@ required_fragments = [
     "Android Debug",
     "android-runtime-smoke.sh",
     "available=false",
-    "actions/checkout@v7",
-    "actions/setup-dotnet@v6",
-    "actions/upload-artifact@v7",
-    "actions/download-artifact@v7",
+    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7",
+    "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6",
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
+    "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7",
 ]
 missing = [fragment for fragment in required_fragments if fragment not in workflow]
 if missing:
