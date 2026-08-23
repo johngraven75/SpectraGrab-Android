@@ -18,9 +18,46 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Wait for the emulator to fully boot before any ADB interaction.
+# Polls sys.boot_completed and dev.bootcomplete (both must be "1") then waits
+# for the launcher to appear so that uiautomator has a live root node.
+wait_for_boot_complete() {
+  local max_attempts=120
+  printf 'Waiting for emulator boot...\n'
+  for i in $(seq 1 "$max_attempts"); do
+    local boot sys_boot
+    boot="$(adb shell getprop dev.bootcomplete 2>/dev/null | tr -d '[:space:]')" || true
+    sys_boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '[:space:]')" || true
+    if [[ "$boot" == "1" && "$sys_boot" == "1" ]]; then
+      printf 'Boot complete properties set (attempt %d).\n' "$i"
+      # Allow the system UI / launcher an additional moment to settle.
+      sleep 5
+      return 0
+    fi
+    sleep 3
+  done
+  printf 'Emulator did not signal boot complete within timeout.\n' >&2
+  adb shell getprop | grep -E '(boot|init)' >&2 || true
+  return 1
+}
+
+# Capture a UI hierarchy with retry to handle transient "null root node" errors
+# that occur when uiautomator is briefly unavailable after boot.
 dump_ui() {
-  adb shell uiautomator dump /sdcard/window.xml >/dev/null
-  adb exec-out cat /sdcard/window.xml >"$ui_dump"
+  local attempts=10
+  for _ in $(seq 1 "$attempts"); do
+    if adb shell uiautomator dump /sdcard/window.xml 2>/dev/null | grep -qv 'null root node'; then
+      adb exec-out cat /sdcard/window.xml >"$ui_dump"
+      # Validate the dump is non-empty XML before returning.
+      if [[ -s "$ui_dump" ]] && python3 -c "import xml.etree.ElementTree as ET; ET.parse('$ui_dump')" 2>/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 3
+  done
+  printf 'uiautomator dump failed after %d attempts.\n' "$attempts" >&2
+  adb shell dumpsys activity | head -40 >&2 || true
+  return 1
 }
 
 ui_contains() {
@@ -155,6 +192,7 @@ assert_plugin_marker() {
 }
 
 adb wait-for-device
+wait_for_boot_complete
 adb uninstall "$package_id" >/dev/null 2>&1 || true
 adb install "$release_apk"
 launch_app
